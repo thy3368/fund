@@ -13,6 +13,451 @@
 ✅ **列式存储**: 数据压缩比高，存储成本低  
 ✅ **标准SQL**: 无学习成本，与Spring Data JPA完美集成  
 
+## 数据采集源设计
+
+### 1. MVP阶段数据源 (Mock数据)
+
+#### Mock数据生成器
+```java
+@Component
+@Profile("mvp")
+public class MockCashFlowDataSource implements CashFlowDataSource {
+    
+    private final Random random = new Random();
+    private final List<String> mockSymbols = Arrays.asList(
+        // 美股
+        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "META", "NVDA", "NFLX",
+        // 中概股
+        "BABA", "JD", "PDD", "BIDU", "NIO", "XPEV", "LI",
+        // 港股
+        "00700.HK", "00941.HK", "01810.HK", "02015.HK",
+        // A股 (转换格式)
+        "000001.SZ", "000002.SZ", "600000.SS", "600036.SS"
+    );
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .map(this::generateMockData)
+            .delayElements(Duration.ofMillis(100)); // 模拟网络延迟
+    }
+    
+    private StockCashFlowData generateMockData(String symbol) {
+        // 基于时间和符号生成一致的随机数据
+        LocalDateTime now = LocalDateTime.now();
+        long seed = symbol.hashCode() + now.getHour() * 60 + now.getMinute();
+        Random symbolRandom = new Random(seed);
+        
+        // 根据市场时段调整资金流活跃度
+        double marketActivity = getMarketActivity(symbol, now);
+        
+        BigDecimal baseFlow = BigDecimal.valueOf(symbolRandom.nextGaussian() * 10_000_000 * marketActivity);
+        BigDecimal totalVolume = BigDecimal.valueOf(symbolRandom.nextDouble() * 100_000_000);
+        
+        return StockCashFlowData.builder()
+            .symbol(symbol)
+            .timestamp(now)
+            .netInflow(baseFlow)
+            .totalVolume(totalVolume)
+            .institutionalFlow(baseFlow.multiply(BigDecimal.valueOf(0.6 + symbolRandom.nextDouble() * 0.3)))
+            .retailFlow(baseFlow.multiply(BigDecimal.valueOf(0.1 + symbolRandom.nextDouble() * 0.3)))
+            .foreignFlow(generateForeignFlow(symbol, baseFlow, symbolRandom))
+            .dataSource("MOCK_GENERATOR")
+            .qualityDimension(QualityDimension.SIM)
+            .build();
+    }
+    
+    private double getMarketActivity(String symbol, LocalDateTime time) {
+        // 根据不同市场的交易时段调整活跃度
+        int hour = time.getHour();
+        
+        if (symbol.endsWith(".HK") || symbol.endsWith(".SS") || symbol.endsWith(".SZ")) {
+            // 亚洲市场: 9:00-17:00 北京时间
+            return (hour >= 9 && hour <= 17) ? 1.0 : 0.1;
+        } else if (symbol.contains("BABA") || symbol.contains("JD")) {
+            // 中概股: 跟随美股时间但受亚洲时段影响
+            return ((hour >= 9 && hour <= 17) || (hour >= 21 || hour <= 4)) ? 0.8 : 0.2;
+        } else {
+            // 美股: 21:30-04:00 北京时间
+            return (hour >= 21 || hour <= 4) ? 1.0 : 0.1;
+        }
+    }
+    
+    private BigDecimal generateForeignFlow(String symbol, BigDecimal baseFlow, Random random) {
+        // 模拟外资流向
+        if (symbol.endsWith(".SS") || symbol.endsWith(".SZ")) {
+            // A股外资占比通常较低
+            return baseFlow.multiply(BigDecimal.valueOf(0.1 + random.nextDouble() * 0.2));
+        } else if (symbol.endsWith(".HK")) {
+            // 港股外资占比较高
+            return baseFlow.multiply(BigDecimal.valueOf(0.3 + random.nextDouble() * 0.4));
+        } else {
+            // 美股外资流向
+            return baseFlow.multiply(BigDecimal.valueOf(0.2 + random.nextDouble() * 0.3));
+        }
+    }
+}
+```
+
+#### Mock数据配置
+```yaml
+# application-mvp.yml
+app:
+  cash-flow:
+    mock-data:
+      enabled: true
+      symbol-count: 100
+      update-interval: 5m
+      base-volume: 10000000
+      volatility-factor: 0.3
+      market-hours:
+        asia: "09:00-17:00"
+        europe: "15:00-23:00"  
+        america: "21:30-04:00"
+    
+    data-quality:
+      mock-confidence: 0.8
+      add-noise: true
+      simulate-outages: false
+```
+
+### 2. 真实数据源 (生产环境)
+
+#### A. 免费数据源 (MVP升级)
+
+**1. Alpha Vantage API**
+```java
+@Component
+@Profile("!mvp")
+@ConditionalOnProperty(name = "app.data-sources.alpha-vantage.enabled", havingValue = "true")
+public class AlphaVantageDataSource implements CashFlowDataSource {
+    
+    private final WebClient webClient;
+    private final String apiKey;
+    
+    public AlphaVantageDataSource(@Value("${app.data-sources.alpha-vantage.api-key}") String apiKey) {
+        this.apiKey = apiKey;
+        this.webClient = WebClient.builder()
+            .baseUrl("https://www.alphavantage.co/query")
+            .defaultHeader("User-Agent", "CashFlow-Monitor/1.0")
+            .build();
+    }
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .flatMap(this::fetchIntraday)
+            .map(this::calculateNetFlow)
+            .filter(Objects::nonNull);
+    }
+    
+    private Mono<AlphaVantageResponse> fetchIntraday(String symbol) {
+        return webClient.get()
+            .uri(uriBuilder -> uriBuilder
+                .queryParam("function", "TIME_SERIES_INTRADAY")
+                .queryParam("symbol", symbol)
+                .queryParam("interval", "5min")
+                .queryParam("apikey", apiKey)
+                .queryParam("outputsize", "compact")
+                .build())
+            .retrieve()
+            .bodyToMono(AlphaVantageResponse.class)
+            .timeout(Duration.ofSeconds(30))
+            .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)))
+            .onErrorResume(e -> {
+                log.warn("Alpha Vantage API调用失败: {}", symbol, e);
+                return Mono.empty();
+            });
+    }
+    
+    private StockCashFlowData calculateNetFlow(AlphaVantageResponse response) {
+        // 基于价格变化和成交量计算净流入
+        // 算法: 净流入 = 成交额 * (收盘价-开盘价)/开盘价 * 系数
+        var timeSeries = response.getTimeSeries();
+        if (timeSeries.isEmpty()) return null;
+        
+        var latest = timeSeries.values().iterator().next();
+        BigDecimal open = latest.getOpen();
+        BigDecimal close = latest.getClose();
+        BigDecimal volume = latest.getVolume();
+        
+        BigDecimal priceChange = close.subtract(open);
+        BigDecimal changeRatio = priceChange.divide(open, 6, RoundingMode.HALF_UP);
+        BigDecimal turnover = volume.multiply(close.add(open).divide(BigDecimal.valueOf(2)));
+        BigDecimal netInflow = turnover.multiply(changeRatio);
+        
+        return StockCashFlowData.builder()
+            .symbol(response.getSymbol())
+            .timestamp(LocalDateTime.now())
+            .netInflow(netInflow)
+            .totalVolume(turnover)
+            .dataSource("ALPHA_VANTAGE")
+            .qualityDimension(QualityDimension.MQ)
+            .build();
+    }
+}
+```
+
+**2. Yahoo Finance API (非官方)**
+```java
+@Component
+@Profile("!mvp")
+public class YahooFinanceDataSource implements CashFlowDataSource {
+    
+    private final WebClient webClient;
+    
+    public YahooFinanceDataSource() {
+        this.webClient = WebClient.builder()
+            .baseUrl("https://query1.finance.yahoo.com/v8/finance/chart")
+            .defaultHeader("User-Agent", "Mozilla/5.0 (compatible; CashFlow-Monitor/1.0)")
+            .build();
+    }
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .flatMap(this::fetchYahooData)
+            .map(this::convertToStockCashFlowData);
+    }
+    
+    private Mono<YahooFinanceResponse> fetchYahooData(String symbol) {
+        return webClient.get()
+            .uri("/{symbol}?interval=5m&range=1d", symbol)
+            .retrieve()
+            .bodyToMono(YahooFinanceResponse.class)
+            .timeout(Duration.ofSeconds(15))
+            .retryWhen(Retry.backoff(2, Duration.ofSeconds(1)));
+    }
+}
+```
+
+#### B. 中国市场数据源
+
+**1. 东方财富API**
+```java
+@Component
+@Profile("!mvp")
+public class EastMoneyDataSource implements CashFlowDataSource {
+    
+    private final WebClient webClient;
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .filter(this::isChinaStock)  // 只处理A股
+            .flatMap(this::fetchEastMoneyFlow)
+            .map(this::convertToStockCashFlowData);
+    }
+    
+    private Mono<EastMoneyResponse> fetchEastMoneyFlow(String symbol) {
+        // 东方财富资金流向API
+        String secid = convertToSecId(symbol);  // 转换为东财格式
+        
+        return webClient.get()
+            .uri("http://push2.eastmoney.com/api/qt/stock/fflow/daykline/get?secid={secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63", secid)
+            .retrieve()
+            .bodyToMono(EastMoneyResponse.class)
+            .timeout(Duration.ofSeconds(10));
+    }
+    
+    private StockCashFlowData convertToStockCashFlowData(EastMoneyResponse response) {
+        var data = response.getData();
+        if (data == null || data.getKlines().isEmpty()) return null;
+        
+        var latest = data.getKlines().get(data.getKlines().size() - 1);
+        
+        return StockCashFlowData.builder()
+            .symbol(response.getSymbol())
+            .timestamp(LocalDateTime.now())
+            .netInflow(latest.getMainNetInflow())           // 主力净流入
+            .institutionalFlow(latest.getInstitutionalFlow()) // 机构资金
+            .retailFlow(latest.getRetailFlow())               // 散户资金
+            .foreignFlow(latest.getForeignFlow())             // 外资流入 (北上资金等)
+            .totalVolume(latest.getTotalVolume())
+            .dataSource("EASTMONEY")
+            .qualityDimension(QualityDimension.HQ)
+            .build();
+    }
+}
+```
+
+**2. 同花顺iFinD API (付费)**
+```java
+@Component
+@Profile({"production", "paid"})
+@ConditionalOnProperty(name = "app.data-sources.tonghuashun.enabled", havingValue = "true")
+public class TongHuaShunDataSource implements CashFlowDataSource {
+    
+    private final TongHuaShunApiClient apiClient;
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .flatMap(this::fetchTHSMoneyFlow)
+            .map(this::convertToStockCashFlowData);
+    }
+    
+    private Mono<THSMoneyFlowResponse> fetchTHSMoneyFlow(String symbol) {
+        // 同花顺资金流向数据，包含更详细的机构/散户分类
+        return apiClient.getMoneyFlow(symbol, "5min")
+            .timeout(Duration.ofSeconds(20));
+    }
+}
+```
+
+#### C. 美股专业数据源
+
+**1. Polygon.io API (付费)**
+```java
+@Component
+@Profile({"production", "paid"})
+public class PolygonDataSource implements CashFlowDataSource {
+    
+    private final WebClient webClient;
+    private final String apiKey;
+    
+    @Override
+    public Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols) {
+        return Flux.fromIterable(symbols)
+            .filter(this::isUSStock)
+            .flatMap(this::fetchPolygonAggregates)
+            .map(this::calculateNetFlowFromOHLCV);
+    }
+    
+    private Mono<PolygonAggregatesResponse> fetchPolygonAggregates(String symbol) {
+        return webClient.get()
+            .uri("/v2/aggs/ticker/{symbol}/range/5/minute/{from}/{to}?adjusted=true&sort=desc&limit=1&apikey={apikey}",
+                 symbol, LocalDate.now(), LocalDate.now(), apiKey)
+            .retrieve()
+            .bodyToMono(PolygonAggregatesResponse.class);
+    }
+}
+```
+
+### 3. 数据源管理器
+
+#### 多源数据协调器
+```java
+@Service
+public class DataSourceManager {
+    
+    private final List<CashFlowDataSource> dataSources;
+    private final DataSourceHealthMonitor healthMonitor;
+    private final CircuitBreakerRegistry circuitBreakerRegistry;
+    
+    @Scheduled(fixedRate = 300000) // 5分钟
+    public void collectFromAllSources() {
+        Set<String> activeSymbols = getActiveSymbols();
+        
+        // 按优先级和健康状态选择数据源
+        List<CashFlowDataSource> healthySources = dataSources.stream()
+            .filter(source -> healthMonitor.isHealthy(source))
+            .sorted(this::compareByPriority)
+            .collect(Collectors.toList());
+            
+        if (healthySources.isEmpty()) {
+            log.warn("没有可用的数据源，启用Mock数据源");
+            useMockDataSource(activeSymbols);
+            return;
+        }
+        
+        // 并行采集数据，失败时自动降级
+        healthySources.parallelStream()
+            .forEach(source -> {
+                CircuitBreaker circuitBreaker = circuitBreakerRegistry
+                    .circuitBreaker(source.getClass().getSimpleName());
+                    
+                Supplier<Void> decoratedSupplier = CircuitBreaker
+                    .decorateSupplier(circuitBreaker, () -> {
+                        collectFromSource(source, activeSymbols);
+                        return null;
+                    });
+                    
+                Try.ofSupplier(decoratedSupplier)
+                    .recover(throwable -> {
+                        log.error("数据源 {} 熔断", source.getClass().getSimpleName(), throwable);
+                        return null;
+                    });
+            });
+    }
+    
+    private int compareByPriority(CashFlowDataSource a, CashFlowDataSource b) {
+        // 数据源优先级: 付费API > 免费API > Mock
+        Map<String, Integer> priorities = Map.of(
+            "TongHuaShunDataSource", 1,    // 最高优先级
+            "PolygonDataSource", 2,
+            "EastMoneyDataSource", 3,
+            "AlphaVantageDataSource", 4,
+            "YahooFinanceDataSource", 5,
+            "MockCashFlowDataSource", 10   // 最低优先级
+        );
+        
+        return priorities.getOrDefault(a.getClass().getSimpleName(), 9)
+                .compareTo(priorities.getOrDefault(b.getClass().getSimpleName(), 9));
+    }
+}
+```
+
+### 4. 数据源配置
+
+#### 完整配置文件
+```yaml
+# application.yml
+app:
+  cash-flow:
+    data-sources:
+      # Mock数据源 (MVP)
+      mock:
+        enabled: true
+        symbols: 100
+        base-volume: 10000000
+        
+      # 免费数据源
+      alpha-vantage:
+        enabled: true
+        api-key: ${ALPHA_VANTAGE_API_KEY:demo}
+        rate-limit: 5  # 每分钟5次
+        timeout: 30s
+        
+      yahoo-finance:
+        enabled: true
+        rate-limit: 2000  # 每小时2000次
+        timeout: 15s
+        
+      eastmoney:
+        enabled: true
+        rate-limit: 100   # 每分钟100次
+        timeout: 10s
+        
+      # 付费数据源
+      tonghuashun:
+        enabled: false
+        api-key: ${THS_API_KEY}
+        rate-limit: 10000  # 每天10000次
+        timeout: 20s
+        
+      polygon:
+        enabled: false
+        api-key: ${POLYGON_API_KEY}
+        rate-limit: 5      # 每分钟5次 (免费版)
+        timeout: 25s
+    
+    # 数据采集策略
+    collection:
+      primary-sources: ["tonghuashun", "eastmoney", "polygon"]
+      fallback-sources: ["alpha-vantage", "yahoo-finance"]
+      mock-fallback: true
+      parallel-collection: true
+      max-concurrent: 10
+      
+    # 数据质量控制
+    quality:
+      min-confidence: 0.7
+      cross-validation: true
+      outlier-detection: true
+      data-freshness: 5m
+```
+
 ## 核心组件设计
 
 ### 1. DuckDB配置和集成
