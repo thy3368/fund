@@ -187,20 +187,172 @@ graph TB
 - **Nginx**: 反向代理和负载均衡
 - **Let's Encrypt**: SSL证书管理
 
+## 数据采集和处理流程
+
+### 完整数据流向图
+
+```mermaid
+flowchart TD
+    A[定时调度器 - 每5分钟] --> B[获取活跃股票列表 1000只]
+    B --> C[多数据源健康检查]
+    C --> D{选择可用数据源}
+    
+    D --> E[Mock数据源 - MVP]
+    D --> F[东方财富API - A股真实资金流]
+    D --> G[Alpha Vantage - 美股OHLCV]
+    D --> H[Yahoo Finance - 全球股票]
+    D --> I[同花顺iFinD - 付费专业数据]
+    D --> J[Polygon.io - 美股专业数据]
+    
+    E --> K[生成模拟资金流数据]
+    F --> L[获取真实主力资金流入]
+    G --> M[基于OHLCV计算资金流]
+    H --> N[基于价格变化计算资金流]
+    I --> O[获取详细资金流分解]
+    J --> P[获取高质量美股数据]
+    
+    K --> Q[数据标准化处理]
+    L --> Q
+    M --> Q
+    N --> Q
+    O --> Q
+    P --> Q
+    
+    Q --> R[13维度智能分类]
+    R --> S[数据质量验证]
+    S --> T{质量评分>60%?}
+    
+    T -->|是| U[批量写入DuckDB]
+    T -->|否| V[丢弃低质量数据]
+    
+    U --> W[更新Redis缓存]
+    W --> X[发布到Kafka消息队列]
+    X --> Y[WebSocket实时推送]
+    Y --> Z[前端实时更新]
+    
+    V --> AA[记录质量日志]
+```
+
+### 数据分类详解
+
+#### 🔍 外部采集的原始数据
+
+**1. 东方财富API (A股专业资金流)**
+```json
+{
+    "symbol": "000001.SZ",
+    "mainNetInflow": 15000000,      // 主力净流入 ✅直接获取
+    "institutionalFlow": 12000000,   // 机构资金流 ✅直接获取
+    "retailFlow": 3000000,           // 散户资金流 ✅直接获取
+    "foreignFlow": 5000000,          // 外资流入(北上资金) ✅直接获取
+    "totalVolume": 50000000,         // 总成交额 ✅直接获取
+    "timestamp": "2025-01-17T10:30:00"
+}
+```
+
+**2. Alpha Vantage/Yahoo Finance (OHLCV基础数据)**
+```json
+{
+    "symbol": "AAPL",
+    "open": 185.50,                  // 开盘价 ✅直接获取
+    "close": 186.75,                 // 收盘价 ✅直接获取
+    "volume": 45000000,              // 成交量 ✅直接获取
+    "timestamp": "2025-01-17T10:30:00"
+}
+```
+
+**3. 股票元数据 (外部API获取)**
+```json
+{
+    "symbol": "AAPL",
+    "companyName": "Apple Inc.",     // 公司名称 ✅直接获取
+    "market": "NASDAQ",              // 交易所 ✅直接获取
+    "sector": "Technology",          // 行业 ✅直接获取
+    "marketCapUsd": 2800000000000,   // 市值 ✅直接获取
+    "peRatio": 28.5,                 // 市盈率 ✅直接获取
+    "currency": "USD"                // 交易币种 ✅直接获取
+}
+```
+
+#### 🧮 系统内部计算和统计的数据
+
+**1. 资金流计算算法 (针对OHLCV数据)**
+```java
+// 系统计算净流入 🔄
+private BigDecimal calculateNetFlow(OHLCVData ohlcv) {
+    BigDecimal changeRatio = (close - open) / open;     // 🔄 价格变化率
+    BigDecimal avgPrice = (open + close) / 2;           // 🔄 平均成交价
+    BigDecimal turnover = volume * avgPrice;            // 🔄 总成交额
+    BigDecimal netInflow = turnover * changeRatio * 0.8; // 🔄 净流入估算
+    return netInflow;
+}
+```
+
+**2. 13维度智能分类算法**
+```java
+// 🔄 地理维度分类 (系统计算)
+private GeographicDimension classifyGeographic(String market) {
+    switch (market) {
+        case "NYSE", "NASDAQ": return GeographicDimension.NAM;      
+        case "SSE", "SZSE", "HKEX": return GeographicDimension.CHN; 
+        case "LSE", "EURONEXT": return GeographicDimension.EUR;     
+        // ... 其他分类逻辑
+    }
+}
+
+// 🔄 风险情绪分类 (基于VIX等宏观指标)
+private RiskSentiment classifyRiskSentiment() {
+    BigDecimal vix = vixService.getCurrentVIX(); // 外部数据
+    if (vix > 30) return RiskSentiment.PANIC;    // 🔄 系统分类
+    if (vix > 20) return RiskSentiment.RISK_OFF; // 🔄 系统分类
+    return RiskSentiment.RISK_ON;                // 🔄 系统分类
+}
+```
+
+**3. 多维度聚合统计**
+```sql
+-- 🔄 系统实时计算的聚合分析
+SELECT 
+    geographic_dimension,
+    SUM(net_inflow) as total_inflow,           -- 🔄 系统聚合
+    AVG(net_inflow) as avg_inflow,             -- 🔄 系统聚合
+    COUNT(DISTINCT symbol) as stock_count,      -- 🔄 系统聚合
+    STDDEV(net_inflow) as volatility           -- 🔄 系统统计
+FROM stock_cash_flow_data 
+WHERE timestamp >= NOW() - INTERVAL '24h'
+GROUP BY geographic_dimension;
+```
+
+### 数据来源总结
+
+| 数据类型 | 来源 | 处理方式 | 示例 |
+|---------|------|---------|------|
+| **专业资金流** | ✅ 外部API | 直接使用 | 东方财富主力资金流入 |
+| **基础价格数据** | ✅ 外部API | 算法计算 | Alpha Vantage OHLCV |
+| **股票元数据** | ✅ 外部API | 缓存管理 | 公司信息、市值、行业 |
+| **宏观指标** | ✅ 外部API | 实时获取 | VIX、利率、汇率 |
+| **资金流计算** | 🔄 系统计算 | 算法处理 | 基于OHLCV估算净流入 |
+| **维度分类** | 🔄 系统计算 | 智能分类 | 13维度自动分类 |
+| **聚合统计** | 🔄 系统计算 | 实时计算 | 多维度汇总、趋势分析 |
+| **质量评分** | 🔄 系统计算 | 质量算法 | 数据可信度评估 |
+
 ## 核心组件设计
 
 ### 1. 数据采集组件
 
-#### DataSourceAdapter（数据源适配器）
+#### CashFlowDataSource（资金流数据源接口）
 ```java
 @Component
-public interface DataSourceAdapter {
+public interface CashFlowDataSource {
     /**
-     * 采集数据
-     * @param config 数据源配置
-     * @return 原始数据流
+     * 获取实时资金流数据
      */
-    Flux<RawDataPoint> collectData(DataSourceConfig config);
+    Flux<StockCashFlowData> getRealTimeCashFlow(Set<String> symbols);
+    
+    /**
+     * 获取支持的市场
+     */
+    Set<Market> getSupportedMarkets();
     
     /**
      * 健康检查
@@ -208,142 +360,467 @@ public interface DataSourceAdapter {
     boolean isHealthy();
     
     /**
-     * 获取支持的数据类型
+     * 获取数据源信息
      */
-    Set<AssetType> getSupportedAssetTypes();
+    DataSourceInfo getDataSourceInfo();
 }
 ```
 
-#### 具体实现类
-- `BloombergAdapter`: Bloomberg API适配器
-- `CentralBankAdapter`: 央行数据适配器
-- `ExchangeAdapter`: 交易所数据适配器
-- `ForexAdapter`: 外汇数据适配器
+#### 具体数据源实现
+- `MockCashFlowDataSource`: Mock数据生成器 (MVP)
+- `EastMoneyDataSource`: 东方财富API适配器 (A股真实资金流)
+- `AlphaVantageDataSource`: Alpha Vantage API适配器 (美股OHLCV)
+- `YahooFinanceDataSource`: Yahoo Finance API适配器 (全球股票)
+- `TongHuaShunDataSource`: 同花顺iFinD API适配器 (付费专业)
+- `PolygonDataSource`: Polygon.io API适配器 (美股专业)
 
 ### 2. 数据处理组件
 
-#### StreamProcessor（流处理器）
+#### RealTimeCashFlowProcessor（实时资金流处理器）
 ```java
 @Service
-public class CashFlowStreamProcessor {
+public class RealTimeCashFlowProcessor {
+    
+    private final List<CashFlowDataSource> dataSources;
+    private final DimensionClassifier classifier;
+    private final DataQualityValidator validator;
+    private final JdbcTemplate duckDBTemplate;
     
     /**
-     * 实时计算净流入/流出
+     * 主处理流程 - 每5分钟执行
      */
-    @EventListener
-    public void processRealTimeData(DataStreamEvent event) {
-        // 1. 数据验证
-        // 2. 净流入/流出计算
-        // 3. 异常检测
-        // 4. 结果存储
-        // 5. 实时推送
+    @Scheduled(fixedRate = 300000)
+    @Async("cashFlowTaskExecutor")
+    public void processRealTimeData() {
+        Set<String> activeSymbols = getActiveSymbols(); // ~1000只股票
+        
+        // 并行处理所有健康数据源
+        dataSources.parallelStream()
+            .filter(CashFlowDataSource::isHealthy)
+            .forEach(source -> processDataSource(source, activeSymbols));
     }
     
     /**
-     * 批量数据处理
+     * 单数据源处理流程
      */
-    @Scheduled(fixedRate = 300000) // 5分钟
-    public void processBatchData() {
-        // 1. 数据聚合
-        // 2. 趋势分析
-        // 3. 历史数据更新
+    private void processDataSource(CashFlowDataSource source, Set<String> symbols) {
+        List<StockCashFlowData> processedData = source.getRealTimeCashFlow(symbols)
+            .map(this::enrichWithDimensions)      // 13维度分类
+            .filter(validator::validateQuality)    // 质量验证
+            .collectList()
+            .block(Duration.ofMinutes(2));         // 2分钟超时
+            
+        if (processedData != null && !processedData.isEmpty()) {
+            batchInsertToDuckDB(processedData);    // 批量写入
+            updateRedisCache(processedData);       // 缓存更新
+            publishToKafka(processedData);         // 消息发布
+        }
+    }
+    
+    /**
+     * 数据增强 - 13维度分类
+     */
+    private StockCashFlowData enrichWithDimensions(StockCashFlowData data) {
+        // 获取股票元数据
+        StockMetadata metadata = metadataService.getMetadata(data.getSymbol());
+        
+        // 智能维度分类
+        classifier.classifyAllDimensions(data, metadata);
+        
+        return data;
     }
 }
 ```
 
 ### 3. 分析引擎组件
 
-#### CashFlowAnalyzer（资金流分析器）
+#### CashFlowAnalysisService（资金流分析服务）
 ```java
 @Service
-public class CashFlowAnalyzer {
+@Transactional(readOnly = true)
+public class CashFlowAnalysisService {
+    
+    private final JdbcTemplate duckDBTemplate;
+    private final RedisTemplate<String, Object> redisTemplate;
     
     /**
-     * 计算净流入/流出
+     * 全球资金流总览分析
      */
-    public NetFlowResult calculateNetFlow(AssetType assetType, 
-                                         TimeRange timeRange) {
-        // 基于FR-004中定义的统计方法论实现
-        return null;
+    @Cacheable(value = "globalFlowAnalysis", key = "#request.hashCode()")
+    public GlobalFlowAnalysisResult analyzeGlobalFlow(GlobalFlowRequest request) {
+        String sql = """
+            WITH hourly_flows AS (
+                SELECT 
+                    DATE_TRUNC('hour', timestamp) as flow_hour,
+                    geographic_dimension,
+                    currency_dimension,
+                    risk_sentiment_dimension,
+                    SUM(net_inflow) as hourly_inflow,
+                    SUM(total_volume) as hourly_volume,
+                    COUNT(DISTINCT symbol) as stock_count
+                FROM stock_cash_flow_data 
+                WHERE timestamp >= ? AND timestamp <= ?
+                    AND quality_dimension IN ('HQ', 'MQ')
+                GROUP BY 1, 2, 3, 4
+            ),
+            flow_trends AS (
+                SELECT *,
+                    LAG(hourly_inflow, 1) OVER (
+                        PARTITION BY geographic_dimension, currency_dimension 
+                        ORDER BY flow_hour
+                    ) as prev_hour_inflow,
+                    AVG(hourly_inflow) OVER (
+                        PARTITION BY geographic_dimension, currency_dimension 
+                        ORDER BY flow_hour 
+                        ROWS 23 PRECEDING
+                    ) as ma24h_inflow
+                FROM hourly_flows
+            )
+            SELECT 
+                flow_hour,
+                geographic_dimension,
+                currency_dimension,
+                hourly_inflow,
+                prev_hour_inflow,
+                ma24h_inflow,
+                CASE 
+                    WHEN prev_hour_inflow IS NULL OR prev_hour_inflow = 0 THEN NULL
+                    ELSE (hourly_inflow - prev_hour_inflow) / ABS(prev_hour_inflow) * 100
+                END as hour_change_pct
+            FROM flow_trends
+            WHERE flow_hour >= DATE_TRUNC('hour', NOW() - INTERVAL '24 hours')
+            ORDER BY flow_hour DESC, hourly_inflow DESC
+            LIMIT 1000;
+            """;
+            
+        List<Map<String, Object>> results = duckDBTemplate.queryForList(
+            sql, request.getStartTime(), request.getEndTime());
+            
+        return GlobalFlowAnalysisResult.builder()
+            .analysisTime(LocalDateTime.now())
+            .timeRange(request.getTimeRange())
+            .flowData(convertToFlowData(results))
+            .summary(calculateSummary(results))
+            .build();
     }
     
     /**
-     * 多维度分析
+     * 13维度综合分析
      */
-    public MultiDimensionAnalysis analyzeByDimension(
-        AssetType assetType, 
-        Region region, 
-        TimeRange timeRange) {
-        // 实现US-002B的多维度分析需求
-        return null;
+    public MultiDimensionAnalysisResponse analyzeMultiDimension(MultiDimensionRequest request) {
+        String sql = buildMultiDimensionQuery(request);
+        List<Map<String, Object>> results = duckDBTemplate.queryForList(sql);
+        return MultiDimensionAnalysisResponse.fromQueryResults(results);
     }
     
     /**
-     * 异常检测
+     * 跨境资金流分析
      */
-    public List<AnomalyEvent> detectAnomalies(AssetType assetType) {
-        // 实现US-003的智能预警功能
-        return null;
+    @Cacheable(value = "crossBorderFlow", key = "#timeRange")
+    public CrossBorderFlowResult analyzeCrossBorderFlow(String timeRange) {
+        String sql = """
+            SELECT 
+                cross_border_dimension,
+                geographic_dimension as source_market,
+                SUM(net_inflow) as total_flow,
+                COUNT(DISTINCT symbol) as affected_stocks,
+                AVG(net_inflow) as avg_flow_per_stock,
+                STDDEV(net_inflow) as flow_volatility
+            FROM stock_cash_flow_data 
+            WHERE timestamp >= CURRENT_DATE - INTERVAL '7 days'
+                AND cross_border_dimension IN ('USD_FLOW', 'EUR_FLOW', 'JPY_CARRY', 'SB', 'NB')
+            GROUP BY cross_border_dimension, geographic_dimension
+            HAVING SUM(ABS(net_inflow)) > 1000000
+            ORDER BY total_flow DESC;
+            """;
+            
+        List<Map<String, Object>> results = duckDBTemplate.queryForList(sql);
+        return CrossBorderFlowResult.fromQueryResults(results);
     }
 }
 ```
 
-### 4. 数据模型设计
-
-#### 核心实体类
-
+#### DimensionClassifier（13维度智能分类器）
 ```java
-// 资产类型枚举
-public enum AssetType {
-    STOCK("股票"),
-    BOND("债券"), 
-    FOREX("外汇"),
-    COMMODITY("大宗商品"),
-    REAL_ESTATE("房地产"),
-    CRYPTOCURRENCY("加密货币"),
-    CASH_EQUIVALENT("现金类资产"),
-    ALTERNATIVE("另类投资"),
-    SPOT_TRADING("现货贸易");
+@Service
+public class DimensionClassifier {
+    
+    private final VIXService vixService;
+    private final MacroDataService macroService;
+    private final StockMetadataService metadataService;
+    
+    /**
+     * 完整的13维度分类
+     */
+    public void classifyAllDimensions(StockCashFlowData data, StockMetadata metadata) {
+        // 1-4: 基础维度分类 (基于元数据)
+        data.setGeographicDimension(classifyGeographic(metadata.getMarket()));
+        data.setCurrencyDimension(classifyCurrency(metadata.getCurrency()));
+        data.setMarketCapDimension(classifyMarketCap(metadata.getMarketCapUsd()));
+        data.setSectorDimension(classifySector(metadata.getSector()));
+        
+        // 5-8: 资金流向维度 (基于数据特征)
+        data.setCrossBorderDimension(classifyCrossBorder(data, metadata));
+        data.setSourceDimension(classifySource(data));
+        data.setStyleDimension(classifyStyle(metadata));
+        data.setTimezoneDimension(classifyTimezone(data.getTimestamp()));
+        
+        // 9-10: 时间维度
+        data.setTimeDimension(classifyTimeDimension(data.getTimestamp()));
+        
+        // 11-13: 宏观环境维度 (基于实时指标)
+        data.setRiskSentimentDimension(classifyRiskSentiment());
+        data.setLiquidityDimension(classifyLiquidity());
+        data.setGeopoliticalDimension(classifyGeopolitical());
+        
+        // 质量维度在数据验证时设置
+    }
+    
+    /**
+     * 风险情绪分类 (基于VIX指数)
+     */
+    private RiskSentimentDimension classifyRiskSentiment() {
+        BigDecimal vixLevel = vixService.getCurrentVIX();
+        
+        if (vixLevel.compareTo(BigDecimal.valueOf(30)) > 0) {
+            return RiskSentimentDimension.PANIC;
+        } else if (vixLevel.compareTo(BigDecimal.valueOf(20)) > 0) {
+            return RiskSentimentDimension.RISK_OFF;
+        } else if (vixLevel.compareTo(BigDecimal.valueOf(15)) < 0) {
+            return RiskSentimentDimension.RISK_ON;
+        } else {
+            return RiskSentimentDimension.NEUTRAL;
+        }
+    }
+    
+    /**
+     * 跨境资金流向分类
+     */
+    private CrossBorderDimension classifyCrossBorder(StockCashFlowData data, StockMetadata metadata) {
+        String symbol = data.getSymbol();
+        String market = metadata.getMarket();
+        
+        // 港股通南下资金
+        if (symbol.endsWith(".HK") && data.getForeignFlow() != null && 
+            data.getForeignFlow().compareTo(BigDecimal.ZERO) > 0) {
+            return CrossBorderDimension.SB;
+        }
+        
+        // 沪深港通北上资金
+        if ((market.equals("SSE") || market.equals("SZSE")) && 
+            data.getForeignFlow() != null && data.getForeignFlow().compareTo(BigDecimal.ZERO) > 0) {
+            return CrossBorderDimension.NB;
+        }
+        
+        // 美元流向
+        if (market.equals("NYSE") || market.equals("NASDAQ")) {
+            return CrossBorderDimension.USD_FLOW;
+        }
+        
+        return CrossBorderDimension.HM; // 默认热钱流动
+    }
 }
+```
 
-// 资金流动实体
+### 4. DuckDB数据模型设计
+
+#### 核心数据表结构
+
+**1. 股票基础信息表**
+```sql
+CREATE TABLE stock_metadata (
+    symbol VARCHAR PRIMARY KEY,
+    company_name VARCHAR NOT NULL,
+    market VARCHAR NOT NULL,           -- NYSE, NASDAQ, SSE, SZSE, HKEX
+    sector VARCHAR,                    -- Technology, Finance, Healthcare等
+    market_cap_usd DECIMAL(20,2),      -- 市值(美元)
+    pe_ratio DECIMAL(8,2),             -- 市盈率
+    pb_ratio DECIMAL(8,2),             -- 市净率
+    currency VARCHAR(3),               -- 交易币种
+    geographic_dimension VARCHAR(10),   -- 地理维度预分类
+    market_cap_dimension VARCHAR(10),   -- 市值维度预分类
+    style_dimension VARCHAR(10),        -- 风格维度预分类
+    sector_dimension VARCHAR(10),       -- 行业维度预分类
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**2. 资金流动数据表 (主表)**
+```sql
+CREATE TABLE stock_cash_flow_data (
+    id VARCHAR PRIMARY KEY,
+    symbol VARCHAR NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    
+    -- 核心资金流数据
+    net_inflow DECIMAL(20,2) NOT NULL,      -- 净流入金额(美元)
+    total_volume DECIMAL(20,2),             -- 总成交额
+    institutional_flow DECIMAL(20,2),       -- 机构资金流
+    retail_flow DECIMAL(20,2),              -- 散户资金流
+    foreign_flow DECIMAL(20,2),             -- 外资流入
+    
+    -- 13维度分类字段
+    geographic_dimension VARCHAR(10),        -- 地理维度: NAM/EUR/APD/CHN/OEM/FM
+    currency_dimension VARCHAR(10),          -- 货币维度: RSV/EMC/COM/SH
+    market_cap_dimension VARCHAR(10),        -- 市值维度: LC/MC/SC/XC
+    style_dimension VARCHAR(10),             -- 风格维度: GR/VA/BL/MO
+    sector_dimension VARCHAR(10),            -- 行业维度: TECH/FIN/HC等
+    cross_border_dimension VARCHAR(15),      -- 跨境资金: USD_FLOW/SB/NB等
+    timezone_dimension VARCHAR(10),          -- 时区维度: AS/ES/AMS/CTZ
+    source_dimension VARCHAR(10),            -- 资金来源: INST/RET/FOR/DOM/ETF
+    time_dimension VARCHAR(5),               -- 时间维度: RT/1H/1D/1W/1M/1Q
+    risk_sentiment_dimension VARCHAR(15),    -- 风险情绪: RISK_ON/RISK_OFF/NEUTRAL/PANIC
+    liquidity_dimension VARCHAR(10),         -- 流动性: LOOSE/TIGHT/CRISIS/NORMAL
+    geopolitical_dimension VARCHAR(15),      -- 地缘政治: GEO_STABLE/GEO_TENSION/TRADE_WAR/MILITARY
+    quality_dimension VARCHAR(5),            -- 数据质量: HQ/MQ/LQ/SIM
+    
+    data_source VARCHAR(20) NOT NULL,       -- 数据来源标识
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建高性能索引
+CREATE INDEX idx_cash_flow_symbol_time ON stock_cash_flow_data (symbol, timestamp);
+CREATE INDEX idx_cash_flow_dimensions ON stock_cash_flow_data 
+    (geographic_dimension, sector_dimension, risk_sentiment_dimension);
+CREATE INDEX idx_cash_flow_quality_time ON stock_cash_flow_data 
+    (quality_dimension, timestamp) WHERE quality_dimension IN ('HQ', 'MQ');
+```
+
+#### JPA实体类定义
+
+**1. 股票资金流数据实体**
+```java
 @Entity
-@Table(name = "cash_flows")
-public class CashFlow {
+@Table(name = "stock_cash_flow_data")
+@Cacheable
+public class StockCashFlowData {
+    
     @Id
     private String id;
     
+    @Column(nullable = false, length = 20)
+    private String symbol;
+    
+    @Column(nullable = false)
+    private LocalDateTime timestamp;
+    
+    // 核心资金流数据
+    @Column(nullable = false, precision = 20, scale = 2)
+    private BigDecimal netInflow;
+    
+    @Column(precision = 20, scale = 2)
+    private BigDecimal totalVolume;
+    
+    @Column(precision = 20, scale = 2)
+    private BigDecimal institutionalFlow;
+    
+    @Column(precision = 20, scale = 2)
+    private BigDecimal retailFlow;
+    
+    @Column(precision = 20, scale = 2)
+    private BigDecimal foreignFlow;
+    
+    // 13维度枚举字段
     @Enumerated(EnumType.STRING)
-    private AssetType assetType;
+    @Column(length = 10)
+    private GeographicDimension geographicDimension;
     
-    private String subCategory; // 细分类别
-    private BigDecimal netInflow; // 净流入金额（美元）
-    private BigDecimal totalVolume; // 总交易量
-    private String region; // 地区
-    private String currency; // 币种
-    private LocalDateTime timestamp; // 时间戳
-    private String dataSource; // 数据来源
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private CurrencyDimension currencyDimension;
     
-    // getters, setters, 构造函数...
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private MarketCapDimension marketCapDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private StyleDimension styleDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private SectorDimension sectorDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 15)
+    private CrossBorderDimension crossBorderDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private TimezoneDimension timezoneDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private SourceDimension sourceDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 5)
+    private TimeDimension timeDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 15)
+    private RiskSentimentDimension riskSentimentDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private LiquidityDimension liquidityDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 15)
+    private GeopoliticalDimension geopoliticalDimension;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(length = 5)
+    private QualityDimension qualityDimension;
+    
+    @Column(nullable = false, length = 20)
+    private String dataSource;
+    
+    @Column(nullable = false)
+    private LocalDateTime createdAt;
+    
+    @PrePersist
+    protected void onCreate() {
+        if (id == null) {
+            id = UUID.randomUUID().toString();
+        }
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
+    
+    // Builders, getters, setters...
+}
+```
+
+**2. 13维度枚举定义**
+```java
+// 地理维度
+public enum GeographicDimension {
+    NAM("北美市场"), EUR("欧洲发达"), APD("亚太发达"),
+    CHN("中国市场"), OEM("其他新兴"), FM("前沿市场");
 }
 
-// 分析结果实体
-@Entity
-@Table(name = "analysis_results")
-public class AnalysisResult {
-    @Id
-    private String id;
-    
-    @Enumerated(EnumType.STRING)
-    private AssetType assetType;
-    
-    private String analysisType; // 分析类型
-    private Map<String, Object> metrics; // 分析指标
-    private LocalDateTime calculatedAt; // 计算时间
-    private String methodology; // 计算方法论
-    
-    // getters, setters...
+// 风险情绪维度
+public enum RiskSentimentDimension {
+    RISK_ON("风险偏好"), RISK_OFF("避险模式"),
+    NEUTRAL("中性情绪"), PANIC("恐慌情绪");
 }
+
+// 跨境资金流维度
+public enum CrossBorderDimension {
+    USD_FLOW("美元流向"), SB("南下资金"), NB("北上资金"),
+    EUR_FLOW("欧资流向"), JPY_CARRY("日元套利"),
+    QF("QFII资金"), EM_CAP("新兴市场资金"), HM("热钱流动");
+}
+
+// 数据质量维度
+public enum QualityDimension {
+    HQ("高质量"), MQ("中等质量"), LQ("低质量"), SIM("模拟数据");
+}
+
+// ... 其他维度枚举定义
 ```
 
 ## API设计
