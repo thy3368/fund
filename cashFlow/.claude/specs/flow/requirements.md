@@ -93,10 +93,12 @@
 **Plan B全球资金流动统计维度:**
 
 **1. 地理维度（Geographic Dimension）**
-- **发达市场（Developed）**: 美国、欧洲、日本、澳洲，统计代码：DEV
-- **新兴市场（Emerging）**: 中国、印度、巴西、俄罗斯，统计代码：EM
+- **北美市场（North America）**: 美国、加拿大，统计代码：NAM
+- **欧洲发达（Europe Developed）**: 德国、法国、英国、瑞士，统计代码：EUR
+- **亚太发达（Asia-Pacific Dev）**: 日本、澳洲、韩国、新加坡，统计代码：APD
+- **中国市场（China）**: A股、港股、中概股，统计代码：CHN
+- **其他新兴（Other Emerging）**: 印度、巴西、俄罗斯、墨西哥，统计代码：OEM
 - **前沿市场（Frontier）**: 东南亚、中东、非洲，统计代码：FM
-- **离岸市场（Offshore）**: 香港、新加坡、伦敦（中概股、ADR），统计代码：OFF
 
 **2. 货币维度（Currency Dimension）**
 - **储备货币（Reserve）**: USD、EUR、JPY、GBP，统计代码：RSV
@@ -129,9 +131,13 @@
 - **电信股（Telecom）**: 通信服务，统计代码：TEL
 
 **6. 跨境资金流向维度（Cross-border Flow Dimension）**
+- **美元回流/外流（Dollar Flow）**: 美元资金全球流向，统计代码：USD_FLOW
 - **南下资金（Southbound）**: 港股通资金流向，统计代码：SB
 - **北上资金（Northbound）**: 沪深港通资金流向，统计代码：NB
+- **欧资流向（Euro Flow）**: 欧洲资金流向，统计代码：EUR_FLOW
+- **日资流向（Yen Carry Trade）**: 日元套利交易资金，统计代码：JPY_CARRY
 - **QFII/RQFII**: 合格境外投资者资金，统计代码：QF
+- **新兴市场资金（EM Capital）**: 印度、巴西等新兴市场资金，统计代码：EM_CAP
 - **热钱流动（Hot Money）**: 短期投机资金，统计代码：HM
 
 **7. 时区维度（Time Zone Dimension）**
@@ -155,7 +161,25 @@
 - **月级（Monthly）**: 本月累计数据，统计代码：1M
 - **季度级（Quarterly）**: 本季度累计数据，统计代码：1Q
 
-**10. 数据质量维度（Quality Dimension）**
+**10. 风险情绪维度（Risk Sentiment Dimension）**
+- **风险偏好（Risk On）**: 资金流向股票、新兴市场，统计代码：RISK_ON
+- **避险模式（Risk Off）**: 资金流向债券、黄金、日元，统计代码：RISK_OFF
+- **中性情绪（Neutral）**: 风险情绪平衡，统计代码：NEUTRAL
+- **恐慌情绪（Panic）**: 大规模资金逃离风险资产，统计代码：PANIC
+
+**11. 流动性维度（Liquidity Dimension）**
+- **宽松流动性（Loose）**: 央行宽松政策环境，统计代码：LOOSE
+- **紧缩流动性（Tight）**: 央行紧缩政策环境，统计代码：TIGHT
+- **流动性危机（Crisis）**: 市场流动性枯竭，统计代码：CRISIS
+- **正常流动性（Normal）**: 流动性环境正常，统计代码：NORMAL
+
+**12. 地缘政治维度（Geopolitical Dimension）**
+- **地缘稳定（Stable）**: 地缘政治环境稳定，统计代码：GEO_STABLE
+- **地缘紧张（Tension）**: 地缘政治紧张局势，统计代码：GEO_TENSION
+- **贸易冲突（Trade War）**: 贸易战/制裁影响，统计代码：TRADE_WAR
+- **军事冲突（Military）**: 军事冲突/战争影响，统计代码：MILITARY
+
+**13. 数据质量维度（Quality Dimension）**
 - **高质量（High Quality）**: 多源验证，置信度 > 95%，统计代码：HQ
 - **中等质量（Medium Quality）**: 单源可信，置信度 80-95%，统计代码：MQ
 - **低质量（Low Quality）**: 数据存疑，置信度 < 80%，统计代码：LQ
