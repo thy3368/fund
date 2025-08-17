@@ -42,105 +42,150 @@
 
 ##### 需要采集的数据类型
 
-**核心交易数据:**
+**核心指数数据:**
+- **指数OHLCV数据**: 开盘价、最高价、最低价、收盘价、成交量
+- **ETF资金流数据**: 
+  - 直接数据: ETF日净流入/流出、申购赎回单位数
+  - 计算数据: 基于ETF推算的指数资金流向
+- **指数成份变化**: 成份股调整、权重变化  
+- **跨市场数据**: 期货持仓变化、期权流向数据
 
-[//]: # (- **OHLCV数据**: 开盘价、最高价、最低价、收盘价、成交量)
-- **专业资金流数据**: 主力资金净流入/流出、超大单/大单/中单/小单流向
-
-[//]: # (- **tick级别数据**: 逐笔成交记录（价格、数量、买卖方向、时间戳）)
-
-[//]: # (- **订单簿数据**: 五档买卖盘数据)
-
-**股票元数据:**
-- **基本信息**: 股票代码、名称、交易所、上市日期、退市日期
-- **分类信息**: 行业代码(GICS/ICB)、市值分类、风格分类
-- **地理信息**: 注册地、主要经营地、所属时区
-- **公司属性**: 货币单位、流通股本、总股本、市值
-
-**支持13维度的补充数据:**
-- **跨境持股数据**: 外资持股比例、QFII/RQFII持股
-- **机构持股数据**: 公募基金、私募基金、保险资金持股
-- **风险评级数据**: 信用评级、波动率等级、流动性评级
-- **地缘政治标签**: 敏感行业标记、制裁清单状态
+**指数元数据:**
+- **基本信息**: 指数代码、名称、交易所、基准日期
+- **分类信息**: 市场分类(发达/新兴)、行业分类、风格分类  
+- **地理信息**: 所属国家/地区、时区、货币
+- **指数属性**: 基点、权重方法、成份股数量、市值
 
 ##### 13维度数据映射
 
 | 维度 | 所需数据字段 | 数据来源 |
 |------|-------------|----------|
-| **地理维度** | 注册地、交易所位置、主要业务地区 | 公司基本信息、交易所数据 |
-| **货币维度** | 交易货币、报告货币、汇率 | 交易所数据、汇率API |
-| **市值维度** | 总市值、流通市值、自由流通市值 | 实时价格×股本数据 |
-| **风格维度** | P/E比率、P/B比率、增长率、股息率 | 财务数据、估值指标 |
-| **行业维度** | GICS代码、ICB代码、自定义行业分类 | 标准分类数据库 |
-| **跨境维度** | 外资持股比例、跨境上市状态 | 监管报告、QFII数据 |
-| **时区维度** | 交易所时区、主要业务时区 | 交易所信息 |
-| **数据源维度** | 数据提供商、数据质量评级 | 内部数据质量系统 |
-| **时间维度** | 交易时间、非交易时间、节假日 | 交易日历 |
-| **风险情绪维度** | VIX相关性、贝塔系数、波动率 | 技术指标计算 |
-| **流动性维度** | 日均成交额、换手率、买卖价差 | 交易数据计算 |
-| **地缘政治维度** | 敏感行业标记、制裁清单状态 | 政策数据库 |
-| **质量维度** | 数据完整性、更新及时性、准确性 | 数据质量监控 |
+| **地理维度** | 指数所属国家/地区、交易所位置 | 指数基本信息 |
+| **货币维度** | 指数计价货币、汇率转换 | 交易所数据、汇率API |
+| **市值维度** | 大盘股指数(SPY)、中盘股(MDY)、小盘股(IWM) | 不同市值指数对比 |
+| **风格维度** | 成长型指数、价值型指数、股息指数 | 风格分类指数 |
+| **行业维度** | 11个行业ETF(XLK/XLF/XLV等) | 行业分类ETF |
+| **跨境维度** | 本土指数 vs 全球指数、跨境ETF | MSCI指数、跨境ETF |
+| **时区维度** | 指数交易时区、主要交易时段 | 交易所时区信息 |
+| **数据源维度** | 数据提供商、指数发布机构 | 指数公司、数据供应商 |
+| **时间维度** | 交易时间、收盘时间、节假日 | 交易日历 |
+| **风险情绪维度** | VIX指数、波动率指数 | 恐慌指数、波动率指标 |
+| **流动性维度** | 指数成交量、ETF流动性 | 交易量数据 |
+| **地缘政治维度** | 发达市场 vs 新兴市场 | 市场分类标准 |
+| **质量维度** | 指数数据完整性、更新及时性 | 数据质量监控 |
+
+##### 指数净流入数据获取策略
+
+**直接获取ETF净流入数据 (30个):**
+```yaml
+us-etfs-direct-flows:
+  市场ETF: [SPY, QQQ, IWM, VTI, DIA, MDY]
+  行业ETF: [XLK, XLF, XLV, XLE, XLY, XLP, XLI, XLB, XLU, XLRE, XLC]
+  国际ETF: [EWJ, EWG, EWU, FXI, ASHR, EWY, EWZ, etc.]
+  数据字段:
+    - daily_net_inflow: 日净流入金额
+    - shares_outstanding: 流通份额
+    - creation_units: 申购单位数
+    - redemption_units: 赎回单位数
+  数据源: ETF.com, Morningstar, Bloomberg ETF
+```
+
+**通过相关ETF推算指数流向 (12个):**
+```yaml
+index-flow-calculation:
+  中国指数:
+    - 上证指数 ← 通过FXI, ASHR ETF推算
+    - 深证成指 ← 通过ASHR, 159901推算
+    - 创业板指 ← 通过159915, 159952推算
+    
+  其他指数:
+    - 日经225 ← 通过EWJ, 1329.T推算
+    - 恒生指数 ← 通过2800.HK, FXI推算
+    - 欧洲指数 ← 通过EWG, EWU, EWQ推算
+  
+  计算方法:
+    指数净流入 = Σ(相关ETF净流入 × 指数权重)
+```
 
 ##### 数据源配置
 
-**主要数据源（免费）:**
+**ETF净流入数据源（免费）:**
 ```yaml
-free-sources:
-  alpha-vantage:
-    api-key: required
-    rate-limit: 5-calls/minute
-    coverage: 全球主要市场
-    data-types: [OHLCV, 基本面数据]
+free-etf-sources:
+  etf-com:
+    api-key: not-required
+    rate-limit: 1000-calls/day
+    coverage: 美国主要ETF
+    data-types: [日净流入, 申购赎回, AUM变化]
     
   yahoo-finance:
     rate-limit: 2000-calls/hour  
-    coverage: 全球65+市场
-    data-types: [OHLCV, 元数据, 财务数据]
+    coverage: 全球指数和ETF
+    data-types: [指数OHLCV, ETF基本信息]
     
-  eastmoney:
-    coverage: 中国A股、港股
-    data-types: [OHLCV, 资金流, 行业分类]
-    real-time: true
+  morningstar-basic:
+    coverage: 全球ETF
+    data-types: [ETF流向, 持仓数据]
+    limitations: 延迟1天
 ```
 
-**专业数据源（付费）:**
+**专业ETF数据源（付费）:**
 ```yaml
-paid-sources:
-  tonghuashun:
-    coverage: 全球股市
-    data-types: [实时行情, 专业资金流, Level-2数据]
-    latency: <1秒
+paid-etf-sources:
+  bloomberg-etf:
+    coverage: 全球ETF
+    data-types: [实时ETF流向, 机构持仓, 衍生品数据]
+    latency: <30分钟
+    cost: 高
     
-  polygon-io:
-    coverage: 美股市场
-    data-types: [tick数据, 期权数据, 新闻数据]
-    real-time: true
+  morningstar-direct:
+    coverage: 全球ETF详细数据
+    data-types: [实时净流入, 成份股流向, 风险指标]
+    latency: <1小时
+    cost: 中
     
-  wind-api:
-    coverage: 全球市场
-    data-types: [历史数据, 基本面, 估值指标]
+  refinitiv-lipper:
+    coverage: ETF和基金数据
+    data-types: [流向分析, 同类对比, 业绩归因]
     quality: 机构级
+    cost: 高
+```
+
+**指数数据源:**
+```yaml
+index-sources:
+  alpha-vantage:
+    coverage: 全球主要指数OHLCV
+    data-types: [指数价格, 基本信息]
+    
+  investing-com:
+    coverage: 全球指数实时数据
+    data-types: [指数OHLCV, 技术指标]
+    
+  eastmoney:
+    coverage: 中国指数
+    data-types: [指数OHLCV, 成份股数据]
 ```
 
 **验收标准:**
-- WHEN 系统启动时 THEN 应成功连接至少2个外部数据源（东方财富、Alpha Vantage等）
-- WHEN 数据采集运行时 THEN 系统应每5分钟从各数据源获取最新股票数据
-- WHEN 接收到数据源响应时 THEN 系统应将原始数据暂存到数据缓冲区
+- WHEN 系统启动时 THEN 应成功连接至少2个外部数据源（东方财富、Yahoo Finance等）
+- WHEN 数据采集运行时 THEN 系统应每5分钟从各数据源获取最新42个指数数据
+- WHEN 接收到数据源响应时 THEN 系统应将指数原始数据暂存到数据缓冲区
 - WHEN 数据源不可用时 THEN 系统应自动切换到备用数据源并记录告警
-- WHEN 采集完成时 THEN 系统应记录采集统计信息（成功率、延迟、数据量）
+- WHEN 采集完成时 THEN 系统应记录采集统计信息（成功率、延迟、指数覆盖率）
 
 #### 数据质量验收标准
 
 **数据完整性验收:**
 ```yaml
 completeness-tests:
-  ohlcv-data:
-    - test: "验证OHLCV数据无缺失"
+  index-ohlcv-data:
+    - test: "验证指数OHLCV数据无缺失"
       condition: "HIGH >= LOW AND OPEN,CLOSE BETWEEN LOW,HIGH"
       threshold: "99.5%"
       
-  volume-data:
-    - test: "验证成交量为正数"
+  etf-volume-data:
+    - test: "验证ETF成交量为正数"
       condition: "VOLUME >= 0"
       threshold: "100%"
       
@@ -153,20 +198,20 @@ completeness-tests:
 **数据质量验收:**
 ```yaml
 quality-tests:
-  price-validation:
-    - test: "价格异常检测"
-      condition: "|PRICE_CHANGE| < 50% OR HAS_NEWS_EVENT"
+  index-validation:
+    - test: "指数价格异常检测"
+      condition: "|INDEX_CHANGE| < 20% OR HAS_MARKET_EVENT"
       threshold: "99.9%"
       
-  flow-validation:
-    - test: "资金流数据一致性"
+  etf-flow-validation:
+    - test: "ETF资金流数据一致性"
       condition: "NET_INFLOW = INFLOW - OUTFLOW"
       threshold: "100%"
       
   cross-source-validation:
-    - test: "多源数据一致性"
-      condition: "ABS(SOURCE1_PRICE - SOURCE2_PRICE) / SOURCE1_PRICE < 0.1%"
-      threshold: "95%"
+    - test: "多源指数数据一致性"
+      condition: "ABS(SOURCE1_INDEX - SOURCE2_INDEX) / SOURCE1_INDEX < 0.05%"
+      threshold: "98%"
 ```
 
 **13维度分类验收:**
@@ -174,19 +219,19 @@ quality-tests:
 dimension-tests:
   geographic:
     - test: "地理维度分类准确性"
-      sample-size: 1000
+      sample-size: 42
       manual-verification: true
-      target-accuracy: "99%"
+      target-accuracy: "100%"
       
   market-cap:
-    - test: "市值分类正确性"
-      condition: "LARGE_CAP >= 100亿, MID_CAP: 20-100亿, SMALL_CAP < 20亿"
+    - test: "市值维度分类正确性"
+      condition: "SPY=大盘股, MDY=中盘股, IWM=小盘股"
       threshold: "100%"
       
-  industry:
-    - test: "行业分类标准化"
-      condition: "GICS_CODE MATCHES STANDARD AND ICB_CODE MATCHES STANDARD"
-      threshold: "98%"
+  sector:
+    - test: "行业维度分类标准化"
+      condition: "11个行业ETF分类正确"
+      threshold: "100%"
 ```
 
 #### 监控指标
@@ -196,18 +241,18 @@ dimension-tests:
 performance-kpis:
   collection-success-rate:
     target: ">99.5%"
-    calculation: "成功采集次数 / 总采集次数"
+    calculation: "成功采集指数次数 / 总采集次数"
     
-  data-coverage:
+  index-coverage:
     target: ">95%"
-    calculation: "有数据的股票数 / 目标股票数"
+    calculation: "有数据的指数数 / 目标42个指数"
     
   average-latency:
-    target: "<4秒"
-    calculation: "平均数据采集延迟"
+    target: "<2秒"
+    calculation: "平均指数数据采集延迟"
     
   api-quota-usage:
-    target: "<80%"
+    target: "<50%"
     calculation: "已使用API调用 / API配额"
 ```
 
@@ -215,35 +260,125 @@ performance-kpis:
 ```yaml
 quality-kpis:
   data-accuracy:
-    target: ">99%"
-    calculation: "通过验证的记录数 / 总记录数"
+    target: ">99.5%"
+    calculation: "通过验证的指数记录数 / 总记录数"
     
   duplicate-rate:
-    target: "<0.1%"
-    calculation: "重复记录数 / 总记录数"
+    target: "<0.01%"
+    calculation: "重复指数记录数 / 总记录数"
     
   missing-data-rate:
-    target: "<1%"
-    calculation: "缺失字段数 / 总字段数"
+    target: "<0.5%"
+    calculation: "缺失指数字段数 / 总字段数"
 ```
 
-#### 实施优先级
+#### 实施优先级 - 市场指数采集方案
 
 **第一批采集（高优先级）:**
-- **美股市场**: NYSE、NASDAQ前500大市值股票
-- **中国A股**: 沪深300成份股
-- **港股**: 恒生指数成份股
-- **数据类型**: OHLCV + 基本资金流 + 元数据
+- **美股指数**: SPY(S&P500), QQQ(NASDAQ100), IWM(Russell2000)
+- **中国指数**: 000001(上证指数), 399001(深证成指), 399006(创业板指)
+- **港股指数**: HSI(恒生指数), HSCEI(恒生国企指数)
+- **数据类型**: 指数OHLCV + ETF资金流 + 市场元数据
 
 **第二批采集（中优先级）:**
-- **欧洲市场**: 欧洲STOXX 600
-- **日本市场**: 日经225
-- **数据类型**: 增加tick级数据 + 机构持股数据
+- **欧洲指数**: SX5E(欧洲STOXX50), UKX(英国FTSE100), DAX(德国DAX30)
+- **日本指数**: NKY(日经225), TPX(东证指数)
+- **数据类型**: 增加期货数据 + 跨境资金流
 
 **第三批采集（扩展覆盖）:**
-- **新兴市场**: 印度、巴西、韩国主要指数
-- **小市值股票**: 完善长尾覆盖
+- **新兴市场指数**: SENSEX(印度), IBOV(巴西), KOSPI(韩国), RTS(俄罗斯)
+- **行业指数**: 科技、金融、能源、医疗等主要行业ETF
 - **数据类型**: 完整13维度分类数据
+
+#### 指数采集详细清单
+
+**核心市场指数 (23个):**
+```yaml
+tier1-indices:
+  北美 (6个):
+    - SPY: SPDR S&P 500 ETF
+    - QQQ: Invesco QQQ ETF (NASDAQ-100)
+    - IWM: iShares Russell 2000 ETF
+    - VTI: Vanguard Total Stock Market ETF
+    - DIA: SPDR Dow Jones Industrial Average ETF
+    - MDY: SPDR S&P MidCap 400 ETF
+    
+  中国 (5个):
+    - 000001.SS: 上证综合指数
+    - 399001.SZ: 深证成份指数
+    - 399006.SZ: 创业板指数
+    - 000016.SS: 上证50指数
+    - HSI: 恒生指数
+    
+  欧洲 (7个):
+    - SX5E: Euro STOXX 50
+    - UKX: FTSE 100 (英国)
+    - DAX: DAX 30 (德国)
+    - CAC: CAC 40 (法国)
+    - IBEX: IBEX 35 (西班牙)
+    - AEX: AEX 25 (荷兰)
+    - SMI: Swiss Market Index
+    
+  亚太其他 (5个):
+    - NKY: Nikkei 225 (日本)
+    - TPX: TOPIX (日本)
+    - AS51: ASX 200 (澳洲)
+    - STI: Straits Times Index (新加坡)
+    - KOSPI: KOSPI 200 (韩国)
+```
+
+**新兴市场指数 (8个):**
+```yaml
+tier2-indices:
+  新兴亚洲:
+    - SENSEX: BSE Sensex (印度)
+    - NIFTY: NSE Nifty 50 (印度)
+    - SET: SET Index (泰国)
+    - PCOMP: PSEi (菲律宾)
+    
+  新兴美洲:
+    - IBOV: Bovespa Index (巴西)
+    - IPSA: IPSA (智利)
+    
+  新兴欧非:
+    - RTS: RTS Index (俄罗斯)
+    - TOP40: FTSE/JSE Top 40 (南非)
+```
+
+**行业ETF指数 (11个):**
+```yaml
+sector-etfs:
+  科技: XLK (Technology Select Sector SPDR)
+  金融: XLF (Financial Select Sector SPDR) 
+  医疗: XLV (Health Care Select Sector SPDR)
+  能源: XLE (Energy Select Sector SPDR)
+  消费: XLY (Consumer Discretionary SPDR)
+  必需消费: XLP (Consumer Staples SPDR)
+  工业: XLI (Industrial Select Sector SPDR)
+  材料: XLB (Materials Select Sector SPDR)
+  公用事业: XLU (Utilities Select Sector SPDR)
+  房地产: XLRE (Real Estate Select Sector SPDR)
+  通讯: XLC (Communication Services SPDR)
+```
+
+**总计: 42个指数/ETF**
+
+#### 指数采集优势
+
+**相比个股采集的优势:**
+- ✅ **数据量减少99%**: 从4000+个股降至42个指数
+- ✅ **成本降低95%**: API调用次数大幅减少
+- ✅ **覆盖度更全**: 指数代表整个市场资金流向
+- ✅ **数据质量更高**: 指数数据更加标准化和可靠
+- ✅ **实时性更好**: 更容易获得实时数据
+- ✅ **维护简单**: 指数构成相对稳定
+
+**支持的分析维度:**
+- 📊 **地理维度**: 不同国家/地区市场对比
+- 💰 **市值维度**: 大盘股(SPY) vs 小盘股(IWM)
+- 🏭 **行业维度**: 11个主要行业ETF对比
+- 📈 **风格维度**: 成长型 vs 价值型指数
+- 🌍 **发达vs新兴**: 发达市场 vs 新兴市场资金流向
 
 **功能要求:**
 - 支持多数据源并行采集
