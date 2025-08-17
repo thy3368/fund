@@ -82,51 +82,153 @@ us-etfs-direct-flows:
   市场ETF: [SPY, QQQ, IWM, VTI, DIA, MDY]
   行业ETF: [XLK, XLF, XLV, XLE, XLY, XLP, XLI, XLB, XLU, XLRE, XLC]
   国际ETF: [EWJ, EWG, EWU, FXI, ASHR, EWY, EWZ, etc.]
-  数据字段:
-    - daily_net_inflow: 日净流入金额
-    - shares_outstanding: 流通份额
-    - creation_units: 申购单位数
-    - redemption_units: 赎回单位数
-  数据源: ETF.com, Morningstar, Bloomberg ETF
-```
-
-**通过相关ETF推算指数流向 (12个):**
-```yaml
-index-flow-calculation:
-  中国指数:
-    - 上证指数 ← 通过FXI, ASHR ETF推算
-    - 深证成指 ← 通过ASHR, 159901推算
-    - 创业板指 ← 通过159915, 159952推算
-    
-  其他指数:
-    - 日经225 ← 通过EWJ, 1329.T推算
-    - 恒生指数 ← 通过2800.HK, FXI推算
-    - 欧洲指数 ← 通过EWG, EWU, EWQ推算
   
-  计算方法:
-    指数净流入 = Σ(相关ETF净流入 × 指数权重)
+  数据获取示例 (SPY):
+    基本信息:
+      - ticker: "SPY"
+      - full_name: "SPDR S&P 500 ETF Trust"
+      - aum: $450B (全球最大ETF)
+      - tracking_index: "S&P 500"
+    
+    实时流向数据:
+      - daily_net_inflow: $1.25B (2024-01-15示例)
+      - total_inflow: $2.1B
+      - total_outflow: $0.85B
+      - creation_units: 25,000单位
+      - redemption_units: 8,500单位
+      - shares_outstanding_change: +16.5M份额
+      - confidence_score: 95%
+    
+    验证计算:
+      - 按份额计算: 16.5M × $480.73 = $7.93B
+      - 按创设单位: (25k-8.5k) × 50k × $480.73 = $7.93B
+      - API报告: $1.25B (可能有统计口径差异)
+    
+    业务含义:
+      - 流入占AUM比例: 2.8% (较大规模)
+      - 市场信号: 机构看好大盘股
+      - 预期影响: 推动S&P500上涨0.5-1%
+  
+  数据源: ETF.com, Yahoo Finance, Morningstar, Bloomberg ETF
+  更新频率: 实时(盘中), 确认数据(盘后)
+  数据质量: 95-99%准确度
 ```
 
-##### 数据源配置
-
-**ETF净流入数据源（免费）:**
+**多源融合计算指数流向 (12个):**
 ```yaml
-free-etf-sources:
+multi-source-fusion-model:
+  中国指数 (准确度85-92%):
+    上证指数:
+      数据源权重:
+        - 40% 沪股通北向资金 (Wind/东方财富API)
+        - 25% 相关ETF流向 (FXI, ASHR, 510050)
+        - 20% 股指期货持仓变化 (IF主力合约)
+        - 15% 融资融券余额变化
+      
+      计算公式: 净流入 = 0.4×北向 + 0.25×ETF + 0.2×期货 + 0.15×融资融券
+      数据源: Wind, 东方财富, ETF.com, 中金所
+      更新频率: 5分钟
+      
+    深证成指:
+      数据源权重:
+        - 40% 深股通北向资金
+        - 25% 相关ETF (ASHR, 159901)
+        - 20% IC股指期货持仓
+        - 15% 融资融券数据
+      
+    创业板指:
+      数据源权重:
+        - 50% 北向资金创业板部分
+        - 30% ETF流向 (159915, 159952)
+        - 20% 期货持仓变化
+  
+  其他指数 (准确度70-85%):
+    日经225:
+      - 50% ETF流向 (EWJ, 1329.T)
+      - 30% 期货持仓变化
+      - 20% 外资流向统计
+    
+    恒生指数:
+      - 40% ETF流向 (2800.HK, FXI)
+      - 35% 南向资金
+      - 25% 期货数据
+    
+    欧美指数:
+      - 60% ETF流向 (EWG, EWU, EWQ)
+      - 25% 期货持仓
+      - 15% 机构流向估算
+
+  动态权重调整:
+    市场波动 > 3%: 提高北向资金权重至50%
+    牛市期间: 提高ETF权重至35%
+    熊市期间: 提高期货数据权重至30%
+```
+
+##### 多源融合数据源配置
+
+**北向资金数据源 (权重40-50%):**
+```yaml
+northbound-sources:
+  eastmoney-api:
+    coverage: 沪股通+深股通实时数据
+    data-types: [净买入额, 余额, 成交额]
+    update-frequency: 实时
+    accuracy: 99%
+    
+  wind-api:
+    coverage: 详细北向资金流向
+    data-types: [个股明细, 行业分布, 历史数据]
+    latency: <1分钟
+    cost: 付费
+    
+  tonghuashun:
+    coverage: 北向资金统计
+    data-types: [实时流向, 龙虎榜, 机构动向]
+    accuracy: 95%
+```
+
+**ETF流向数据源 (权重25-35%):**
+```yaml
+etf-sources:
   etf-com:
-    api-key: not-required
-    rate-limit: 1000-calls/day
     coverage: 美国主要ETF
     data-types: [日净流入, 申购赎回, AUM变化]
+    rate-limit: 1000-calls/day
     
-  yahoo-finance:
-    rate-limit: 2000-calls/hour  
-    coverage: 全球指数和ETF
-    data-types: [指数OHLCV, ETF基本信息]
+  bloomberg-etf:
+    coverage: 全球ETF实时流向
+    data-types: [机构持仓, 流向分析]
+    latency: <30分钟
+    cost: 高
+```
+
+**期货持仓数据源 (权重20-30%):**
+```yaml
+futures-sources:
+  cffex-api:
+    coverage: 中金所股指期货
+    data-types: [IF/IC/IH持仓变化, 成交量]
+    update-frequency: 每日
     
-  morningstar-basic:
-    coverage: 全球ETF
-    data-types: [ETF流向, 持仓数据]
-    limitations: 延迟1天
+  bloomberg-futures:
+    coverage: 全球期货市场
+    data-types: [持仓报告, 大户持仓]
+    accuracy: 机构级
+```
+
+**融资融券数据源 (权重15%):**
+```yaml
+margin-sources:
+  sse-szse-official:
+    coverage: 沪深交易所官方数据
+    data-types: [融资余额, 融券余额, 变化额]
+    update-frequency: 每日
+    accuracy: 100%
+    
+  wind-margin:
+    coverage: 详细融资融券统计
+    data-types: [个股明细, 历史趋势]
+    latency: T+1
 ```
 
 **专业ETF数据源（付费）:**
@@ -167,27 +269,30 @@ index-sources:
     data-types: [指数OHLCV, 成份股数据]
 ```
 
-**验收标准:**
-- WHEN 系统启动时 THEN 应成功连接至少2个外部数据源（东方财富、Yahoo Finance等）
-- WHEN 数据采集运行时 THEN 系统应每5分钟从各数据源获取最新42个指数数据
-- WHEN 接收到数据源响应时 THEN 系统应将指数原始数据暂存到数据缓冲区
-- WHEN 数据源不可用时 THEN 系统应自动切换到备用数据源并记录告警
-- WHEN 采集完成时 THEN 系统应记录采集统计信息（成功率、延迟、指数覆盖率）
+**多源融合验收标准:**
+- WHEN 系统启动时 THEN 应成功连接4类数据源（北向资金、ETF、期货、融资融券）中至少3类
+- WHEN 数据采集运行时 THEN 系统应每5分钟从各数据源获取最新数据并执行融合计算
+- WHEN 执行融合计算时 THEN 系统应根据市场状态动态调整权重并输出置信度评分
+- WHEN 某类数据源不可用时 THEN 系统应自动重新分配权重并保持总权重100%
+- WHEN 计算完成时 THEN 系统应记录各数据源贡献度和最终准确度评估
+- WHEN 数据源之间出现重大分歧时 THEN 系统应触发异常检测并人工审核
 
 #### 数据质量验收标准
 
 **数据完整性验收:**
 ```yaml
 completeness-tests:
-  index-ohlcv-data:
-    - test: "验证指数OHLCV数据无缺失"
-      condition: "HIGH >= LOW AND OPEN,CLOSE BETWEEN LOW,HIGH"
-      threshold: "99.5%"
-      
-  etf-volume-data:
-    - test: "验证ETF成交量为正数"
-      condition: "VOLUME >= 0"
+  etf-flow-data:
+    - test: "验证ETF净流入数据完整性(以SPY为例)"
+      condition: "NET_INFLOW, CREATION_UNITS, REDEMPTION_UNITS 字段齐全"
       threshold: "100%"
+      sample: "SPY日净流入$1.25B, 申购25k单位, 赎回8.5k单位"
+      
+  etf-calculation-consistency:
+    - test: "验证ETF流向计算一致性"
+      condition: "份额变化×价格 与 创设单位×单位份额×价格 差异<10%"
+      threshold: "95%"
+      example: "SPY: 16.5M×$480.73 vs (25k-8.5k)×50k×$480.73"
       
   timestamp-data:
     - test: "验证时间戳格式和时区"
@@ -198,20 +303,29 @@ completeness-tests:
 **数据质量验收:**
 ```yaml
 quality-tests:
-  index-validation:
-    - test: "指数价格异常检测"
-      condition: "|INDEX_CHANGE| < 20% OR HAS_MARKET_EVENT"
-      threshold: "99.9%"
-      
   etf-flow-validation:
-    - test: "ETF资金流数据一致性"
-      condition: "NET_INFLOW = INFLOW - OUTFLOW"
+    - test: "ETF资金流数据逻辑一致性"
+      condition: "NET_INFLOW = TOTAL_INFLOW - TOTAL_OUTFLOW"
       threshold: "100%"
+      example: "SPY: $1.25B = $2.1B - $0.85B"
+      
+  etf-scale-reasonableness:
+    - test: "ETF流入规模合理性检测"
+      condition: "日流入 < AUM × 10% AND 日流入 > -AUM × 5%"
+      threshold: "99.5%"
+      example: "SPY日流入$1.25B < $450B×10% ✓"
+      
+  etf-market-correlation:
+    - test: "ETF流向与指数表现相关性"
+      condition: "大额流入时指数应上涨，大额流出时指数应下跌"
+      threshold: "85%"
+      example: "SPY流入$1.25B，S&P500上涨1.2% ✓"
       
   cross-source-validation:
-    - test: "多源指数数据一致性"
-      condition: "ABS(SOURCE1_INDEX - SOURCE2_INDEX) / SOURCE1_INDEX < 0.05%"
-      threshold: "98%"
+    - test: "多源ETF数据一致性"
+      condition: "不同数据源报告的净流入差异 < 15%"
+      threshold: "90%"
+      example: "ETF.com vs Yahoo Finance vs Bloomberg"
 ```
 
 **13维度分类验收:**
@@ -236,40 +350,56 @@ dimension-tests:
 
 #### 监控指标
 
-**采集性能指标:**
+**多源融合性能指标:**
 ```yaml
-performance-kpis:
-  collection-success-rate:
-    target: ">99.5%"
-    calculation: "成功采集指数次数 / 总采集次数"
+fusion-performance-kpis:
+  multi-source-success-rate:
+    target: ">99%"
+    calculation: "成功连接数据源类型数 / 总数据源类型数"
     
-  index-coverage:
-    target: ">95%"
-    calculation: "有数据的指数数 / 目标42个指数"
+  fusion-accuracy:
+    target: "85-92%"
+    calculation: "基于历史回测的准确度评估"
     
-  average-latency:
-    target: "<2秒"
-    calculation: "平均指数数据采集延迟"
+  calculation-latency:
+    target: "<3秒"
+    calculation: "多源数据融合计算完成时间"
     
-  api-quota-usage:
-    target: "<50%"
-    calculation: "已使用API调用 / API配额"
+  confidence-score:
+    target: ">80%"
+    calculation: "数据源一致性评分"
+    
+  dynamic-weight-adjustment:
+    target: "每日至少1次"
+    calculation: "根据市场状态调整权重的频次"
 ```
 
-**数据质量指标:**
+**数据源质量指标:**
 ```yaml
-quality-kpis:
-  data-accuracy:
-    target: ">99.5%"
-    calculation: "通过验证的指数记录数 / 总记录数"
+source-quality-kpis:
+  northbound-reliability:
+    target: ">99%"
+    weight: "40-50%"
+    calculation: "北向资金数据可用性"
     
-  duplicate-rate:
-    target: "<0.01%"
-    calculation: "重复指数记录数 / 总记录数"
+  etf-flow-reliability:
+    target: ">95%"
+    weight: "25-35%"
+    calculation: "ETF流向数据可用性"
     
-  missing-data-rate:
-    target: "<0.5%"
-    calculation: "缺失指数字段数 / 总字段数"
+  futures-reliability:
+    target: ">90%"
+    weight: "20-30%"
+    calculation: "期货持仓数据可用性"
+    
+  margin-reliability:
+    target: ">95%"
+    weight: "15%"
+    calculation: "融资融券数据可用性"
+    
+  cross-validation-rate:
+    target: ">85%"
+    calculation: "多源数据交叉验证通过率"
 ```
 
 #### 实施优先级 - 市场指数采集方案
