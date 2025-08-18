@@ -25,10 +25,10 @@ public class SpyFlowResult {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     
-    @Column(name = "data_date", nullable = false, unique = true)
+    @Column(name = "data_date", nullable = false)
     private LocalDate dataDate;
     
-    @Column(name = "timestamp", nullable = false)
+    @Column(name = "timestamp", nullable = false, columnDefinition = "TIMESTAMP")
     private Instant timestamp;
     
     // 计算结果
@@ -78,7 +78,7 @@ public class SpyFlowResult {
     @Builder.Default
     private String sectorDimension = "Broad Market";
     
-    @Column(name = "created_at")
+    @Column(name = "created_at", columnDefinition = "TIMESTAMP")
     @Builder.Default
     private Instant createdAt = Instant.now();
 }

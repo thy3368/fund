@@ -28,7 +28,7 @@ public class SpyRawData {
     @Column(name = "data_date", nullable = false)
     private LocalDate dataDate;
     
-    @Column(name = "timestamp", nullable = false)
+    @Column(name = "timestamp", nullable = false, columnDefinition = "TIMESTAMP")
     private Instant timestamp;
     
     // ETF基本信息
@@ -81,7 +81,7 @@ public class SpyRawData {
     @Column(name = "confidence_score")
     private Integer confidenceScore; // 置信度(0-100)
     
-    @Column(name = "created_at")
+    @Column(name = "created_at", columnDefinition = "TIMESTAMP")
     @Builder.Default
     private Instant createdAt = Instant.now();
     

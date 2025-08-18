@@ -1,0 +1,19 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: none  # 禁用自动DDL生成
+    show-sql: false
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: password
+  test:
+    database:
+      replace: none
+
+logging:
+  level:
+    org.hibernate: WARN
+    org.springframework: WARN
+    com.tanggo.fund.cashflow: INFO
