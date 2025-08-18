@@ -1,0 +1,165 @@
+spring:
+  application:
+    name: cashflow-monitor
+  
+  # 数据源配置 - DuckDB
+  datasource:
+    url: jdbc:duckdb:data/cashflow.db
+    driver-class-name: org.duckdb.DuckDBDriver
+    username: 
+    password: 
+  
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+    open-in-view: false
+    database-platform: org.hibernate.dialect.H2Dialect
+  
+  # 任务调度
+  task:
+    scheduling:
+      pool:
+        size: 5
+    execution:
+      pool:
+        core-size: 8
+        max-size: 20
+        queue-capacity: 500
+  
+  # Web配置
+  web:
+    resources:
+      add-mappings: true
+  
+  # Jackson配置
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+# 应用配置
+app:
+  # 数据源配置
+  data-sources:
+    etf-com:
+      api-key: ${ETF_COM_API_KEY:}
+      base-url: https://www.etf.com/api
+      timeout: 30s
+    
+    alpha-vantage:
+      api-key: ${ALPHA_VANTAGE_API_KEY:}
+      base-url: https://www.alphavantage.co
+      timeout: 60s
+    
+    yahoo-finance:
+      base-url: https://query1.finance.yahoo.com
+      timeout: 15s
+  
+  # SPY任务配置
+  spy:
+    collection:
+      interval: 300000  # 5分钟
+      retry-attempts: 3
+      retry-delay: 30000  # 30秒
+    
+    validation:
+      max-daily-inflow-ratio: 0.10  # 10%
+      price-nav-threshold: 0.02     # 2%
+      min-confidence-score: 60
+      min-data-quality-score: 70
+    
+    calculation:
+      async-enabled: true
+      thread-pool-size: 5
+
+# 管理端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    diskspace:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# 日志配置
+logging:
+  level:
+    com.tanggo.fund.cashflow: INFO
+    org.springframework.web.socket: DEBUG
+    org.springframework.scheduling: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/cashflow-monitor.log
+    max-size: 100MB
+    max-history: 30
+
+# 服务器配置
+server:
+  port: 8080
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+  http2:
+    enabled: true
+
+---
+# 开发环境配置
+spring:
+  config:
+    activate:
+      on-profile: dev
+  
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: create-drop
+
+logging:
+  level:
+    com.tanggo.fund.cashflow: DEBUG
+    org.springframework.web: DEBUG
+
+app:
+  spy:
+    collection:
+      interval: 60000  # 1分钟（开发环境更频繁）
+
+---
+# 生产环境配置
+spring:
+  config:
+    activate:
+      on-profile: prod
+  
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+
+logging:
+  level:
+    root: WARN
+    com.tanggo.fund.cashflow: INFO
+
+app:
+  spy:
+    collection:
+      interval: 300000  # 5分钟
